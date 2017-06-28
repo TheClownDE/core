@@ -569,6 +569,11 @@ class KeyManager {
 		return $this->keyStorage->getSystemUserKey($this->publicShareKeyId . '.publicKey', Encryption::ID);
 	}
 
+	public function setPublicShareKey() {
+		$this->publicShareKeyId = $this->config->getAppValue('encryption',
+			'publicShareKeyId');
+	}
+
 	/**
 	 * @param string $purpose
 	 * @param bool $timestamp
@@ -701,7 +706,15 @@ class KeyManager {
 	 * @return string
 	 */
 	public function getMasterKeyId() {
+		if($this->config->getAppValue('encryption', 'masterKeyId') !== $this->masterKeyId) {
+			$this->masterKeyId = $this->config->getAppValue('encryption', 'masterKeyId');
+		}
 		return $this->masterKeyId;
+	}
+
+	public function setMasterKeyId() {
+		$this->masterKeyId = $this->config->getAppValue('encryption',
+			'masterKeyId');
 	}
 
 	/**
