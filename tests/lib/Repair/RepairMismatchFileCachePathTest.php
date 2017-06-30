@@ -101,6 +101,7 @@ class RepairMismatchFileCachePathTest extends TestCase {
 		 *     - files/source/to_move (not created as we simulate that it was already moved)
 		 *     - files/source/to_move/content_to_update (bogus entry to fix)
 		 *     - files/source/to_move/content_to_update/sub (bogus subentry to fix)
+		 *     - files/source/all_your_zombies (parent=fileid must be reparented)
 		 *
 		 * target storage:
 		 *     - files/
@@ -116,6 +117,7 @@ class RepairMismatchFileCachePathTest extends TestCase {
 		 * other:
 		 *     - files/source/do_not_touch (regular entry outside of the repair scope)
 		 *     - files/orphaned/leave_me_alone (unrepairable unrelated orphaned entry)
+		 *
 		 */
 
 		// source storage entries
@@ -148,7 +150,14 @@ class RepairMismatchFileCachePathTest extends TestCase {
 		$nonExistingParentId = $targetId + 100;
 		$orphanedId = $this->createFileCacheEntry($targetStorageId, 'files/' . $targetDir . '/orphaned/leave_me_alone', $nonExistingParentId);
 
-		$doNotTouchId = $this->createFileCacheEntry($sourceStorageId, 'files/' . $targetDir . '/do_not_touch', $sourceId);
+		$doNotTouchId = $this->createFileCacheEntry($sourceStorageId, 'files/source/do_not_touch', $sourceId);
+
+		$superBogusId = $this->createFileCacheEntry($sourceStorageId, 'files/source/all_your_zombies', $sourceId);
+		$qb = $this->connection->getQueryBuilder();
+		$qb->update('filecache')
+			->set('parent', 'fileid')
+			->where($qb->expr()->eq('fileid', $qb->createNamedParameter($superBogusId)));
+		$qb->execute();
 
 		$outputMock = $this->createMock(IOutput::class);
 		$this->repair->run($outputMock);
@@ -190,6 +199,13 @@ class RepairMismatchFileCachePathTest extends TestCase {
 		$this->assertEquals((string)$sourceStorageId, $entry['storage']);
 		$this->assertEquals('files/source/do_not_touch', $entry['path']);
 		$this->assertEquals(md5('files/source/do_not_touch'), $entry['path_hash']);
+
+		// "super bogus" entry reparented
+		$entry = $this->getFileCacheEntry($superBogusId);
+		$this->assertEquals($sourceId, $entry['parent']);
+		$this->assertEquals((string)$sourceStorageId, $entry['storage']);
+		$this->assertEquals('files/source/all_your_zombies', $entry['path']);
+		$this->assertEquals(md5('files/source/all_your_zombies'), $entry['path_hash']);
 	}
 }
 

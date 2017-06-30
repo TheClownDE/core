@@ -103,7 +103,9 @@ class RepairMismatchFileCachePath implements IRepairStep {
 					$qb->expr()->neq('fc.storage', 'fcp.storage')
 				)
 			)
-			->andWhere($qb->expr()->neq('fcp.path', $qb->expr()->literal('')));
+			->andWhere($qb->expr()->neq('fcp.path', $qb->expr()->literal('')))
+			// yes, this was observed in the wild...
+			->andWhere($qb->expr()->neq('fc.fileid', 'fcp.fileid'));
 	}
 
 	private function countResultsToProcess() {
@@ -245,7 +247,11 @@ class RepairMismatchFileCachePath implements IRepairStep {
 			// where fc.parent <> -1
 			->where($qb->expr()->neq('fc.parent', $qb->createNamedParameter(-1)))
 			// and not exists (select 1 from oc_filecache fc2 where fc2.fileid = fc.parent)
-			->andWhere($qb->createFunction('NOT EXISTS (' . $qbe->getSQL() . ')'))
+			->andWhere(
+				$qb->expr()->orX(
+					$qb->expr()->eq('fc.fileid', 'fc.parent'),
+					$qb->createFunction('NOT EXISTS (' . $qbe->getSQL() . ')'))
+				)
 			->andWhere($qb->expr()->notIn('fileid', $qb->createParameter('excludedids')));
 		$qb->setMaxResults(self::CHUNK_SIZE);
 
