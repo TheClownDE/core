@@ -203,6 +203,7 @@ class RepairMismatchFileCachePath implements IRepairStep {
 
 		if (empty($rows)) {
 			// not the case we want to fix!
+			$this->connection->commit();
 			return false;
 		}
 
