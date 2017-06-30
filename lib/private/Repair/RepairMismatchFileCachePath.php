@@ -24,6 +24,7 @@ namespace OC\Repair;
 use OCP\Migration\IOutput;
 use OCP\Migration\IRepairStep;
 use Doctrine\DBAL\Platforms\MySqlPlatform;
+use OCP\DB\QueryBuilder\IQueryBuilder;
 
 /**
  * Repairs file cache entry which path do not match the parent-child relationship
@@ -47,7 +48,7 @@ class RepairMismatchFileCachePath implements IRepairStep {
 	}
 
 	/**
-	 * Fixes the broken entry.
+	 * Fixes the broken entry's path.
 	 *
 	 * @param IOutput $out repair output
 	 * @param int $fileId file id of the entry to fix
@@ -56,8 +57,8 @@ class RepairMismatchFileCachePath implements IRepairStep {
 	 * @param string $correctPath value to which to set the path of the entry 
 	 */
 	private function fixEntryPath(IOutput $out, $fileId, $wrongPath, $correctStorageNumericId, $correctPath) {
-		// delete target if exists
 		$this->connection->beginTransaction();
+		// delete target if exists
 		$qb = $this->connection->getQueryBuilder();
 		$qb->delete('filecache')
 			->where($qb->expr()->eq('storage', $qb->createNamedParameter($correctStorageNumericId)))
@@ -116,14 +117,13 @@ class RepairMismatchFileCachePath implements IRepairStep {
 	}
 
 	/**
-	 * Run the repair step
+	 * Repair all entries for which the parent entry exists but the path
+	 * value doesn't match the parent's path.
 	 *
-	 * @param IOutput $out output
+	 * @param IOutput $out
 	 */
-	public function run(IOutput $out) {
+	private function fixEntriesWithCorrectParentIdButWrongPath(IOutput $out) {
 		$totalResultsCount = 0;
-
-		$out->startProgress($this->countResultsToProcess());
 
 		// find all entries where the path entry doesn't match the path value that would
 		// be expected when following the parent-child relationship, basically
@@ -163,11 +163,147 @@ class RepairMismatchFileCachePath implements IRepairStep {
 			}
 
 			$totalResultsCount += $lastResultsCount;
-		} while ($lastResultsCount === self::CHUNK_SIZE);
 
-		if ($lastResultsCount > 0) {
-			$out->info("Fixed $lastResultsCount file cache entries with wrong path");
+			// note: this is not pagination but repeating the query over and over again
+			// until all possible entries were fixed
+		} while ($lastResultsCount > 0);
+
+		if ($totalResultsCount > 0) {
+			$out->info("Fixed $totalResultsCount file cache entries with wrong path");
 		}
+	}
+
+	/**
+	 * Fixes the broken entry's path.
+	 *
+	 * @param IOutput $out repair output
+	 * @param int $storageId storage id of the entry to fix
+	 * @param int $fileId file id of the entry to fix
+	 * @param string $path path from the entry to fix
+	 * @param int $wrongParentId wrong parent id
+	 * @return bool true if the entry was fixed, false otherwise
+	 */
+	private function fixEntryParent(IOutput $out, $storageId, $fileId, $path, $wrongParentId) {
+		$this->connection->beginTransaction();
+
+		$parentPath = dirname($path);
+
+		// find the correct parent
+		$qb = $this->connection->getQueryBuilder();
+		// select fileid as "correctparentid"
+		$qb->select('fileid')
+			// from oc_filecache
+			->from('filecache')
+			// where storage=$storage and path='$parentPath'
+			->where($qb->expr()->eq('storage', $qb->createNamedParameter($storageId)))
+			->andWhere($qb->expr()->eq('path', $qb->createNamedParameter($parentPath)));
+		$results = $qb->execute();
+		$rows = $results->fetchAll();
+		$results->closeCursor();
+
+		if (empty($rows)) {
+			// not the case we want to fix!
+			return false;
+		}
+
+		$correctParentId = $rows[0]['fileid'];
+
+		$qb = $this->connection->getQueryBuilder();
+		$qb->update('filecache')
+			->set('parent', $qb->createNamedParameter($correctParentId))
+			->where($qb->expr()->eq('fileid', $qb->createNamedParameter($fileId)));
+		$qb->execute();
+
+		$text = "Fixed file cache entry with fileid $fileId, set wrong parent \"$wrongParentId\" to \"$correctParentId\"";
+		$out->advance(1, $text);
+
+		$this->connection->commit();
+
+		return true;
+	}
+
+	/**
+	 * Repair entries where the parent id doesn't point to any existing entry
+	 * by finding the actual parent entry matching the entry's path dirname.
+	 */
+	private function fixEntriesWithNonExistingParentIdEntry(IOutput $out) {
+		// Subquery for parent existence
+		$qbe = $this->connection->getQueryBuilder();
+		$qbe->select($qbe->expr()->literal('1'))
+			->from('filecache', 'fce')
+			->where($qbe->expr()->eq('fce.fileid', 'fc.parent'));
+
+		$qb = $this->connection->getQueryBuilder();
+
+		// Find entries to repair
+		// select fc.storage,fc.fileid,fc.parent as "wrongparent",fc.path,fc.etag
+		// and not exists (select 1 from oc_filecache fc2 where fc2.fileid = fc.parent)
+		$qb->select('storage', 'fileid', 'path', 'parent')
+			// from oc_filecache fc
+			->from('filecache', 'fc')
+			// where fc.parent <> -1
+			->where($qb->expr()->neq('fc.parent', $qb->createNamedParameter(-1)))
+			// and not exists (select 1 from oc_filecache fc2 where fc2.fileid = fc.parent)
+			->andWhere($qb->createFunction('NOT EXISTS (' . $qbe->getSQL() . ')'))
+			->andWhere($qb->expr()->notIn('fileid', $qb->createParameter('excludedids')));
+		$qb->setMaxResults(self::CHUNK_SIZE);
+
+		$totalResultsCount = 0;
+		$blacklist = [-1];
+		do {
+			$qb->setParameter('excludedids', $blacklist, IQueryBuilder::PARAM_INT_ARRAY);
+			$results = $qb->execute();
+			// since we're going to operate on fetched entry, better cache them
+			// to avoid DB lock ups
+			$rows = $results->fetchAll();
+			$results->closeCursor();
+
+			$lastResultsCount = 0;
+			foreach ($rows as $row) {
+				if (!$this->fixEntryParent(
+					$out,
+					$row['storage'],
+					$row['fileid'],
+					$row['path'],
+					$row['parent']
+				)) {
+					$blacklist[] = $row['fileid'];
+				};
+				$lastResultsCount++;
+			}
+
+			$totalResultsCount += $lastResultsCount;
+
+			// note: this is not pagination but repeating the query over and over again
+			// until all possible entries were fixed
+		} while ($lastResultsCount > 0);
+
+		if ($totalResultsCount > 0) {
+			$out->info("Fixed $totalResultsCount file cache entries with wrong path");
+		}
+	}
+
+	/**
+	 * Run the repair step
+	 *
+	 * @param IOutput $out output
+	 */
+	public function run(IOutput $out) {
+
+		// FIXME: count entries from both
+		// FIXME: count sub-entries if possible
+		$out->startProgress($this->countResultsToProcess());
+
+		/*
+		 * This repair itself might overwrite existing target parent entries and create
+		 * orphans where the parent entry of the parent id doesn't exist but the path matches.
+		 * This needs to be repaired by fixEntriesWithNonExistingParentIdEntry(), this is why
+		 * we need to keep this specific order of repair.
+		 */
+		$this->fixEntriesWithCorrectParentIdButWrongPath($out);
+
+		$this->fixEntriesWithNonExistingParentIdEntry($out);
+
 		$out->finishProgress();
 	}
 }

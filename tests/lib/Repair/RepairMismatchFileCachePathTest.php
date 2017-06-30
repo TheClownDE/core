@@ -100,6 +100,7 @@ class RepairMismatchFileCachePathTest extends TestCase {
 		 *     - files/source/
 		 *     - files/source/to_move (not created as we simulate that it was already moved)
 		 *     - files/source/to_move/content_to_update (bogus entry to fix)
+		 *     - files/source/to_move/content_to_update/sub (bogus subentry to fix)
 		 *
 		 * target storage:
 		 *     - files/
@@ -107,7 +108,14 @@ class RepairMismatchFileCachePathTest extends TestCase {
 		 *     - files/target/moved_renamed (already moved target)
 		 *     - files/target/moved_renamed/content_to_update (missing until repair)
 		 *
-		 * if $targetExists: pre-create files/target/moved_renamed/content_to_update
+		 * if $targetExists: pre-create these additional entries:
+		 *     - files/target/moved_renamed/content_to_update (will be overwritten)
+		 *     - files/target/moved_renamed/content_to_update/sub (will be overwritten)
+		 *     - files/target/moved_renamed/content_to_update/unrelated (will be reparented)
+		 *
+		 * other:
+		 *     - files/source/do_not_touch (regular entry outside of the repair scope)
+		 *     - files/orphaned/leave_me_alone (unrepairable unrelated orphaned entry)
 		 */
 
 		// source storage entries
@@ -117,7 +125,7 @@ class RepairMismatchFileCachePathTest extends TestCase {
 		} else {
 			$baseId2 = $baseId1;
 		}
-		$this->createFileCacheEntry($sourceStorageId, 'files/source', $baseId1);
+		$sourceId = $this->createFileCacheEntry($sourceStorageId, 'files/source', $baseId1);
 
 		// target storage entries
 		$targetParentId = $this->createFileCacheEntry($targetStorageId, 'files/' . $targetDir, $baseId2);
@@ -127,26 +135,61 @@ class RepairMismatchFileCachePathTest extends TestCase {
 
 		// bogus entry: any children of the source are not properly updated
 		$movedId = $this->createFileCacheEntry($sourceStorageId, 'files/source/to_move/content_to_update', $targetId);
+		$movedSubId = $this->createFileCacheEntry($sourceStorageId, 'files/source/to_move/content_to_update/sub', $movedId);
 
 		if ($targetExists) {
 			// after the bogus move happened, some code path recreated the parent under a
 			// different file id
 			$existingTargetId = $this->createFileCacheEntry($targetStorageId, 'files/' . $targetDir . '/moved_renamed/content_to_update', $targetId);
+			$existingTargetSubId = $this->createFileCacheEntry($targetStorageId, 'files/' . $targetDir . '/moved_renamed/content_to_update/sub', $existingTargetId);
+			$existingTargetUnrelatedId = $this->createFileCacheEntry($targetStorageId, 'files/' . $targetDir . '/moved_renamed/content_to_update/unrelated', $existingTargetId);
 		}
+
+		$nonExistingParentId = $targetId + 100;
+		$orphanedId = $this->createFileCacheEntry($targetStorageId, 'files/' . $targetDir . '/orphaned/leave_me_alone', $nonExistingParentId);
+
+		$doNotTouchId = $this->createFileCacheEntry($sourceStorageId, 'files/' . $targetDir . '/do_not_touch', $sourceId);
 
 		$outputMock = $this->createMock(IOutput::class);
 		$this->repair->run($outputMock);
 
 		$entry = $this->getFileCacheEntry($movedId);
-
 		$this->assertEquals($targetId, $entry['parent']);
 		$this->assertEquals((string)$targetStorageId, $entry['storage']);
 		$this->assertEquals('files/' . $targetDir . '/moved_renamed/content_to_update', $entry['path']);
 		$this->assertEquals(md5('files/' . $targetDir . '/moved_renamed/content_to_update'), $entry['path_hash']);
 
+		$entry = $this->getFileCacheEntry($movedSubId);
+		$this->assertEquals($movedId, $entry['parent']);
+		$this->assertEquals((string)$targetStorageId, $entry['storage']);
+		$this->assertEquals('files/' . $targetDir . '/moved_renamed/content_to_update/sub', $entry['path']);
+		$this->assertEquals(md5('files/' . $targetDir . '/moved_renamed/content_to_update/sub'), $entry['path_hash']);
+
 		if ($targetExists) {
 			$this->assertFalse($this->getFileCacheEntry($existingTargetId));
+			$this->assertFalse($this->getFileCacheEntry($existingTargetSubId));
+
+			// unrelated folder has been reparented
+			$entry = $this->getFileCacheEntry($existingTargetUnrelatedId);
+			$this->assertEquals($movedId, $entry['parent']);
+			$this->assertEquals((string)$targetStorageId, $entry['storage']);
+			$this->assertEquals('files/' . $targetDir . '/moved_renamed/content_to_update/unrelated', $entry['path']);
+			$this->assertEquals(md5('files/' . $targetDir . '/moved_renamed/content_to_update/unrelated'), $entry['path_hash']);
 		}
+
+		// orphaned entry left untouched
+		$entry = $this->getFileCacheEntry($orphanedId);
+		$this->assertEquals($nonExistingParentId, $entry['parent']);
+		$this->assertEquals((string)$targetStorageId, $entry['storage']);
+		$this->assertEquals('files/' . $targetDir . '/orphaned/leave_me_alone', $entry['path']);
+		$this->assertEquals(md5('files/' . $targetDir . '/orphaned/leave_me_alone'), $entry['path_hash']);
+
+		// "do not touch" entry left untouched
+		$entry = $this->getFileCacheEntry($doNotTouchId);
+		$this->assertEquals($sourceId, $entry['parent']);
+		$this->assertEquals((string)$sourceStorageId, $entry['storage']);
+		$this->assertEquals('files/source/do_not_touch', $entry['path']);
+		$this->assertEquals(md5('files/source/do_not_touch'), $entry['path_hash']);
 	}
 }
 
