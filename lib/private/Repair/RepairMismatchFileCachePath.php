@@ -123,6 +123,7 @@ class RepairMismatchFileCachePath implements IRepairStep {
 	 * value doesn't match the parent's path.
 	 *
 	 * @param IOutput $out
+	 * @return int number of results that were fixed
 	 */
 	private function fixEntriesWithCorrectParentIdButWrongPath(IOutput $out) {
 		$totalResultsCount = 0;
@@ -173,6 +174,8 @@ class RepairMismatchFileCachePath implements IRepairStep {
 		if ($totalResultsCount > 0) {
 			$out->info("Fixed $totalResultsCount file cache entries with wrong path");
 		}
+
+		return $totalResultsCount;
 	}
 
 	/**
@@ -228,6 +231,9 @@ class RepairMismatchFileCachePath implements IRepairStep {
 	/**
 	 * Repair entries where the parent id doesn't point to any existing entry
 	 * by finding the actual parent entry matching the entry's path dirname.
+	 * 
+	 * @param IOutput $out output
+	 * @return int number of results that were fixed
 	 */
 	private function fixEntriesWithNonExistingParentIdEntry(IOutput $out) {
 		// Subquery for parent existence
@@ -288,6 +294,8 @@ class RepairMismatchFileCachePath implements IRepairStep {
 		if ($totalResultsCount > 0) {
 			$out->info("Fixed $totalResultsCount file cache entries with wrong path");
 		}
+
+		return $totalResultsCount;
 	}
 
 	/**
@@ -301,16 +309,22 @@ class RepairMismatchFileCachePath implements IRepairStep {
 		// FIXME: count sub-entries if possible
 		$out->startProgress($this->countResultsToProcess());
 
+		$totalFixed = 0;
+
 		/*
 		 * This repair itself might overwrite existing target parent entries and create
 		 * orphans where the parent entry of the parent id doesn't exist but the path matches.
 		 * This needs to be repaired by fixEntriesWithNonExistingParentIdEntry(), this is why
 		 * we need to keep this specific order of repair.
 		 */
-		$this->fixEntriesWithCorrectParentIdButWrongPath($out);
+		$totalFixed += $this->fixEntriesWithCorrectParentIdButWrongPath($out);
 
-		$this->fixEntriesWithNonExistingParentIdEntry($out);
+		$totalFixed += $this->fixEntriesWithNonExistingParentIdEntry($out);
 
 		$out->finishProgress();
+
+		if ($totalFixed > 0) {
+			$out->warning('Please run `occ files:scan --all` once to complete the repair');
+		}
 	}
 }
