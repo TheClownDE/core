@@ -273,16 +273,17 @@ class RepairMismatchFileCachePath implements IRepairStep {
 
 			$lastResultsCount = 0;
 			foreach ($rows as $row) {
-				if (!$this->fixEntryParent(
+				if ($this->fixEntryParent(
 					$out,
 					$row['storage'],
 					$row['fileid'],
 					$row['path'],
 					$row['parent']
 				)) {
+					$lastResultsCount++;
+				} else {
 					$blacklist[] = $row['fileid'];
 				};
-				$lastResultsCount++;
 			}
 
 			$totalResultsCount += $lastResultsCount;
