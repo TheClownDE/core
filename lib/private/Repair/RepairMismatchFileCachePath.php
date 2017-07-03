@@ -296,6 +296,15 @@ class RepairMismatchFileCachePath implements IRepairStep {
 			$out->info("Fixed $totalResultsCount file cache entries with wrong path");
 		}
 
+		// remove first entry which is -1
+		array_shift($blacklist);
+		if (!empty($blacklist)) {
+			$chunks = array_chunk($blacklist, 100);
+			foreach ($chunks as $chunk) {
+				$out->warning('The entries with the following file ids could not be repaired because the matching parent was not found: ' . implode(', ', $chunk));
+			}
+		}
+
 		return $totalResultsCount;
 	}
 
