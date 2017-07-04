@@ -87,7 +87,7 @@ class RepairMismatchFileCachePath implements IRepairStep {
 		if ($this->connection->getDatabasePlatform() instanceof MySqlPlatform) {
 			$concatFunction = $qb->createFunction("CONCAT(fcp.path, '/', fc.name)");
 		} else {
-			$concatFunction = $qb->createFunction("fcp.path || '/' || fc.name");
+			$concatFunction = $qb->createFunction("fcp.`path` || '/' || fc.`name`");
 		}
 
 		$qb
@@ -138,10 +138,10 @@ class RepairMismatchFileCachePath implements IRepairStep {
 			// if there is a less barbaric way to do this, please let me know...
 			// without this can't access parentpath as the prefixes aren't included
 			// in the result array
-			$qb->createFunction('fc.path as path'),
+			$qb->createFunction('fc.`path` as `path`'),
 			'fc.name',
-			$qb->createFunction('fcp.storage as parentstorage'),
-			$qb->createFunction('fcp.path as parentpath')
+			$qb->createFunction('fcp.`storage` as `parentstorage`'),
+			$qb->createFunction('fcp.`path` as `parentpath`')
 		);
 		$this->addQueryConditions($qb);
 		$qb->setMaxResults(self::CHUNK_SIZE);
