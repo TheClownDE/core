@@ -54,7 +54,7 @@ class RepairMismatchFileCachePathTest extends TestCase {
 				'parent' => $qb->createNamedParameter($parent),
 			]);
 		$qb->execute();
-		return $this->connection->lastInsertId('filecache');
+		return $this->connection->lastInsertId('*PREFIX*filecache');
 	}
 
 	private function getFileCacheEntry($fileId) {
